@@ -1,0 +1,1148 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-device-width, initial-scale=1.0">
+    <title>Facial Data Collection Tool</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exif-js/2.3.0/exif.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            background: #1a202c; 
+            color: #ffffff; 
+        }
+        .grid-card { 
+            background-color: rgba(31, 41, 55, 0.8);
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .input-field { 
+            width: 100%;
+            padding: 0.5rem;
+            background-color: #1f2937;
+            color: white;
+            border: 1px solid #374151;
+            border-radius: 0.375rem;
+        }
+        .input-field:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.5);
+        }
+        .input-field[multiple] {
+            height: 100px;
+        }
+        .color-dot { 
+            width: 1.5rem;
+            height: 1.5rem;
+            border-radius: 9999px;
+            border: 1px solid #374151;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .color-dot:hover {
+            transform: scale(1.1);
+        }
+        .tab-btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem 0.375rem 0 0;
+            transition: background-color 0.2s;
+        }
+        .tab-btn.active {
+            background-color: #374151;
+            font-weight: 500;
+        }
+        .tab-content {
+            display: none;
+            padding-top: 1rem;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .tooltip {
+            position: relative;
+        }
+        .tooltip:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #4b5563;
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            white-space: nowrap;
+            z-index: 10;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-size: 0.875rem;
+            color: #d1d5db;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #jsonPreview {
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body class="min-h-screen py-8">
+    <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6 px-4">
+        <!-- Left Panel -->
+        <div class="grid-card">
+            <div class="toolbar flex flex-wrap justify-between items-center bg-gray-900 px-4 py-2 rounded-xl mb-4">
+                <span class="py-1" id="landmarkLabel">📍 Landmarks: <span id="collectedCount">0</span>/40</span>
+                <div class="flex flex-wrap gap-2">
+                    <button id="toggleModeBtn" class="px-2 py-1 bg-gray-800 rounded hover:bg-gray-700 transition-all tooltip" data-tooltip="Switch between landmarks and colors">🎨 Mode: Landmarks</button>
+                    <button id="undoBtn" class="px-2 py-1 bg-gray-800 rounded hover:bg-gray-700 transition-all tooltip" data-tooltip="Undo last action" disabled>↺ Undo</button>
+                    <button id="redoBtn" class="px-2 py-1 bg-gray-800 rounded hover:bg-gray-700 transition-all tooltip" data-tooltip="Redo last undone action" disabled>↻ Redo</button>
+                    <label class="px-2 py-1 bg-gray-800 rounded hover:bg-gray-700 cursor-pointer transition-all tooltip" data-tooltip="Upload an image">
+                        📷 Upload
+                        <input type="file" id="imageInput" accept="image/jpeg,image/png" class="hidden">
+                    </label>
+                    <button id="resetBtn" class="px-2 py-1 bg-gray-800 rounded hover:bg-gray-700 transition-all tooltip" data-tooltip="Reset all values">🔄 Reset</button>
+                </div>
+            </div>
+            <div class="relative">
+                <div id="dropZone" class="w-full h-64 border-2 border-dashed border-gray-700 rounded-lg flex items-center justify-center">
+                    <p>Drag & drop image here or use upload button</p>
+                </div>
+                <canvas id="imageCanvas" class="w-full rounded-lg border-2 border-gray-700 hidden"></canvas>
+                <div id="currentLandmark" class="absolute top-2 left-2 bg-black/70 px-2 py-1 rounded text-sm hidden"></div>
+            </div>
+            
+            <!-- Color dots -->
+            <div class="mt-4 space-y-3">
+                <div>
+                    <h3 class="text-sm font-medium mb-1">Clothes Colors:</h3>
+                    <div class="flex space-x-2">
+                        <div id="clothes_colour_0" class="color-dot bg-gray-700"></div>
+                        <div id="clothes_colour_1" class="color-dot bg-gray-700"></div>
+                        <div id="clothes_colour_2" class="color-dot bg-gray-700"></div>
+                        <div id="clothes_colour_3" class="color-dot bg-gray-700"></div>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-sm font-medium mb-1">Background Colors:</h3>
+                    <div class="flex space-x-2">
+                        <div id="background_colour_0" class="color-dot bg-gray-700"></div>
+                        <div id="background_colour_1" class="color-dot bg-gray-700"></div>
+                        <div id="background_colour_2" class="color-dot bg-gray-700"></div>
+                        <div id="background_colour_3" class="color-dot bg-gray-700"></div>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-sm font-medium mb-1">Skin Tones:</h3>
+                    <div class="flex space-x-2">
+                        <div id="skin_tone_0" class="color-dot bg-gray-700"></div>
+                        <div id="skin_tone_1" class="color-dot bg-gray-700"></div>
+                        <div id="skin_tone_2" class="color-dot bg-gray-700"></div>
+                        <div id="skin_tone_3" class="color-dot bg-gray-700"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Right Panel -->
+        <div class="grid-card overflow-y-auto max-h-[100vh]">
+            <nav class="flex space-x-2 border-b border-gray-700 pb-2">
+                <button data-tab="basic" class="tab-btn active">Basic Info</button>
+                <button data-tab="advanced" class="tab-btn">Advanced</button>
+                <button data-tab="export" class="tab-btn">Export</button>
+            </nav>
+            
+            <!-- Basic Info Tab -->
+            <div id="basicTab" class="tab-content active space-y-4">
+                <h2 class="text-xl font-semibold mb-4">Camera Details</h2>
+                <div class="form-group">
+                    <label for="unique_id">Unique ID (required)</label>
+                    <input type="text" id="unique_id" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="file_name">File Name</label>
+                    <input type="text" id="file_name" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="file_extension">File Extension</label>
+                    <input type="text" id="file_extension" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="file_size">File Size</label>
+                    <input type="text" id="file_size" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="dimensions">Dimensions</label>
+                    <input type="text" id="dimensions" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="comments">Comments</label>
+                    <input type="text" id="comments" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="date">Date</label>
+                    <input type="text" id="date" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="make">Camera Maker</label>
+                    <input type="text" id="make" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="model">Camera Model</label>
+                    <input type="text" id="model" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="f_stop">F-stop</label>
+                    <input type="text" id="f_stop" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="exposure_time">Exposure Time</label>
+                    <input type="text" id="exposure_time" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="iso_speed">ISO Speed</label>
+                    <input type="text" id="iso_speed" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="exposure_bias">Exposure Bias</label>
+                    <input type="text" id="exposure_bias" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="focal_length">Focal Length</label>
+                    <input type="text" id="focal_length" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="max_aperture">Max Aperture</label>
+                    <input type="text" id="max_aperture" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="metering_mode">Metering Mode</label>
+                    <input type="text" id="metering_mode" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="flash_mode">Flash Mode</label>
+                    <input type="text" id="flash_mode" class="input-field" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="focal_length_35mm">35mm Focal Length</label>
+                    <input type="text" id="focal_length_35mm" class="input-field" readonly>
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Personal Details</h2>
+                <div class="form-group">
+                    <label for="name">Name</label>
+                    <input type="text" id="name" class="input-field" value="Kanhaiyalal">
+                </div>
+                <div class="form-group">
+                    <label for="age_days">Age (Day)</label>
+                    <input type="text" id="age_days" class="input-field" readonly>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="form-group">
+                        <label for="height_cm">Height (cm)</label>
+                        <input type="number" id="height_cm" class="input-field" min="0" value="178">
+                    </div>
+                    <div class="form-group">
+                        <label for="weight_kg">Weight (kg)</label>
+                        <input type="number" id="weight_kg" class="input-field" min="0" value="72">
+                    </div>
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Location</h2>
+                <div class="form-group" style="color: #1a202c;">
+                    <label for="city">City</label>
+                    <select id="city" class="input-field" multiple>
+                        <option value="Dhadheru_Godaran" style="color: white;">Dhadheru_Godaran</option>
+                        <option value="Jaipur" style="color: white;">Jaipur</option>
+                        <option value="custom" style="color: white;">Custom</option>
+                    </select>
+                </div>
+                <div id="custom_city_container" class="form-group hidden">
+                    <label for="custom_city">Custom City</label>
+                    <input type="text" id="custom_city" class="input-field">
+                </div>
+                <div class="form-group">
+                    <label for="latitude_longitude">Latitude, Longitude</label>
+                    <input type="text" id="latitude_longitude" class="input-field" value="27.964547992823288, 74.34065413108007">
+                </div>
+            </div>
+            
+            <!-- Advanced Tab -->
+            <div id="advancedTab" class="tab-content space-y-4">
+                <h2 class="text-xl font-semibold mb-4">Image Source</h2>
+                <div class="form-group">
+                    <label for="image_source">Image Source</label>
+                    <select id="image_source" class="input-field">
+                        <option value="">Select source</option>
+                        <option value="DSLR">DSLR</option>
+                        <option value="Smartphone" selected>Smartphone</option>
+                        <option value="Webcam">Webcam</option>
+                        <option value="Custom">Custom</option>
+                    </select>
+                </div>
+                <div id="custom_image_source_container" class="form-group hidden">
+                    <label for="custom_image_source">Custom Image Source</label>
+                    <input type="text" id="custom_image_source" class="input-field">
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Face Details</h2>
+                <div class="form-group">
+                    <label for="expression">Expression</label>
+                    <select id="expression" class="input-field">
+                        <option value="">Select expression</option>
+                        <option value="Neutral" selected>Neutral</option>
+                        <option value="Smiling">Smiling</option>
+                        <option value="Serious">Serious</option>
+                        <option value="Surprised">Surprised</option>
+                        <option value="Custom">Custom</option>
+                    </select>
+                </div>
+                <div id="custom_expression_container" class="form-group hidden">
+                    <label for="custom_expression">Custom Expression</label>
+                    <input type="text" id="custom_expression" class="input-field">
+                </div>
+                
+                <div class="form-group">
+                    <label for="skin_condition">Skin Condition</label>
+                    <select id="skin_condition" class="input-field">
+                        <option value="">Select condition</option>
+                        <option value="Normal" selected>Normal</option>
+                        <option value="Dry">Dry</option>
+                        <option value="Oily">Oily</option>
+                        <option value="Custom">Custom</option>
+                    </select>
+                </div>
+                <div id="custom_skin_condition_container" class="form-group hidden">
+                    <label for="custom_skin_condition">Custom Skin Condition</label>
+                    <input type="text" id="custom_skin_condition" class="input-field">
+                </div>
+                
+                <div class="form-group">
+                    <label for="wrinkles">Wrinkles</label>
+                    <select id="wrinkles" class="input-field">
+                        <option value="" disabled>Select option</option>
+                        <option value="None" selected>None</option>
+                        <option value="Mild">Mild</option>
+                        <option value="Moderate">Moderate</option>
+                        <option value="Severe">Severe</option>
+                    </select>
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Appearance</h2>
+                <div class="form-group">
+                    <label for="hair_color">Hair Color</label>
+                    <select id="hair_color" class="input-field">
+                        <option value="">Select color</option>
+                        <option value="Black">Black</option>
+                        <option value="White">White</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="beard_length_mm">Beard Length (mm)</label>
+                    <select id="beard_length_mm" class="input-field">
+                        <option value="">Select length</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8</option>
+                    </select>
+                </div>
+                <div class="form-group" style="color: #1a202c;">
+                    <label for="clothes">Clothes</label>
+                    <select id="clothes" class="input-field" multiple>
+                        <option value="shirt" style="color: #ffffff;">Shirt</option>
+                        <option value="t-shirt" style="color: #ffffff;">T-shirt</option>
+                        <option value="coat" style="color: #ffffff;">Coat</option>
+                        <option value="custom" style="color: #ffffff;">Custom</option>
+                    </select>
+                </div>
+                <div id="custom_clothes_container" class="form-group hidden">
+                    <label for="custom_clothes">Custom Clothes</label>
+                    <input type="text" id="custom_clothes" class="input-field">
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Environment</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="form-group">
+                        <label for="lighting">Lighting</label>
+                        <select id="lighting" class="input-field">
+                            <option value="">Select lighting</option>
+                            <option value="Natural" selected>Natural</option>
+                            <option value="Indoor">Indoor</option>
+                            <option value="Studio">Studio</option>
+                            <option value="Dim">Dim</option>
+                            <option value="Bright">Bright</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="uv_index">UV Index (1-11)</label>
+                        <input type="number" id="uv_index" class="input-field" min="1" max="11" value="10">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="aqi">Air Quality Index (0-500)</label>
+                    <input type="number" id="aqi" class="input-field" min="0" max="500">
+                </div>
+                <div class="form-group">
+                    <label for="humidity_percent">Humidity (%)</label>
+                    <select id="humidity_percent" class="input-field">
+                        <option value="">Select humidity</option>
+                        ${Array.from({length: 100}, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('')}
+                    </select>
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Lifestyle</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="form-group">
+                        <label for="sleep">Sleep (hours)</label>
+                        <input type="number" id="sleep" class="input-field" min="0" max="24" step="0.5" value="8">
+                    </div>
+                    <div class="form-group">
+                        <label for="exercise">Exercise (hours)</label>
+                        <input type="number" id="exercise" class="input-field" min="0" max="4" step="0.5" value="0">
+                    </div>
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Health Metrics</h2>
+                <div class="form-group">
+                    <label for="medications">Medications (comma-separated)</label>
+                    <input type="text" id="medications" class="input-field" value="Na">
+                </div>
+                <div class="form-group">
+                    <label for="skincare">Skincare Routine</label>
+                    <textarea id="skincare" class="input-field" rows="3">Na</textarea>
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Additional Information</h2>
+                <div class="form-group">
+                    <label for="life_events">Recent Life Events</label>
+                    <textarea id="life_events" class="input-field" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="tags">Tags (comma-separated)</label>
+                    <input type="text" id="tags" class="input-field">
+                </div>
+                
+                <h2 class="text-xl font-semibold mb-4 mt-6">Landmark Coordinates</h2>
+                <div class="form-group">
+                    <textarea id="landmarkCoordinates" class="input-field h-32" readonly></textarea>
+                </div>
+            </div>
+            
+            <!-- Export Tab -->
+            <div id="exportTab" class="tab-content space-y-4">
+                <div class="flex flex-col md:flex-row justify-between gap-4 mb-6">
+                    <div class="flex flex-col gap-2">
+                        <button id="selectDirBtn" class="px-4 py-2 bg-gray-700 rounded-md hover:bg-gray-600 transition-all">Select Output Directory</button>
+                        <p id="selectedDir" class="text-sm text-gray-400">None selected</p>
+                    </div>
+                    <div class="flex gap-4">
+                        <button id="exportBtn" class="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-500 rounded-md hover:from-blue-600 hover:to-purple-600 transition-all">
+                            Export JSON
+                        </button>
+                        <label class="px-4 py-2 bg-gray-700 rounded-md hover:bg-gray-600 cursor-pointer transition-all">
+                            Import JSON
+                            <input type="file" id="jsonInput" accept=".json" class="hidden">
+                        </label>
+                    </div>
+                </div>
+                
+                <h3 class="text-lg font-medium mb-2">JSON Preview</h3>
+                <pre id="jsonPreview" class="text-xs bg-gray-800 p-3 rounded-md"></pre>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // XLSX Processing
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+            return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+            if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+                try {
+                    var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                    var firstSheetName = workbook.SheetNames[0];
+                    var worksheet = workbook.Sheets[firstSheetName];
+                    var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                    var filteredData = jsonData.filter(row => row.some(filledCell));
+                    var headerRowIndex = filteredData.findIndex((row, index) =>
+                        row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                    );
+                    if (headerRowIndex === -1 || headerRowIndex > 25) {
+                        headerRowIndex = 0;
+                    }
+                    var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
+                    csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                    return csv;
+                } catch (e) {
+                    console.error(e);
+                    return "";
+                }
+            }
+            return gk_fileData[filename] || "";
+        }
+
+        // Constants and Global Variables
+        const landmarkKeys = [
+            'left_eye.outer', 'left_eye.top', 'left_eye.inner', 'left_eye.bottom', 'left_eye.center',
+            'right_eye.outer', 'right_eye.top', 'right_eye.inner', 'right_eye.bottom', 'right_eye.center',
+            'left_eyebrow.outer', 'left_eyebrow.middle', 'left_eyebrow.inner',
+            'right_eyebrow.outer', 'right_eyebrow.middle', 'right_eyebrow.inner',
+            'nose.tip', 'nose.bridge', 'nose.left_nostril', 'nose.right_nostril',
+            'mouth.left_corner', 'mouth.upper_lip', 'mouth.right_corner', 'mouth.lower_lip', 'mouth.center',
+            'chin.tip', 'jaw.left', 'jaw.right',
+            'cheek.left', 'cheek.right',
+            'ear.left.top', 'ear.left.middle', 'ear.left.bottom',
+            'ear.right.top', 'ear.right.middle', 'ear.right.bottom',
+            'forehead.left', 'forehead.center', 'forehead.right',
+            'neck.adam_apple'
+        ];
+        
+        const canvas = document.getElementById('imageCanvas');
+        const ctx = canvas.getContext('2d');
+        const dropZone = document.getElementById('dropZone');
+        const currentLandmark = document.getElementById('currentLandmark');
+        
+        let state = {
+            image: new Image(),
+            originalImage: null,
+            image_id: null,
+            directory: null,
+            directoryHandle: null,
+            landmarks: {},
+            landmarkIndex: 0,
+            colorMode: null,
+            selectedColorBox: null,
+            clothesColours: ['', '', '', ''],
+            backgroundColours: ['', '', '', ''],
+            skinTones: ['', '', '', ''],
+            history: [],
+            redoStack: [],
+            isImporting: false
+        };
+        
+        const apiBaseUrl = 'http://localhost:3001';
+        
+        // Initialize the application
+        function init() {
+            setupEventListeners();
+            updateUI();
+            updateJsonPreview();
+        }
+        
+        // Calculate age in days
+        function calculateAgeInDays(birthDate, captureDate) {
+            const diffTime = captureDate - birthDate;
+            return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        }
+        
+        // Parse EXIF date string
+        function parseExifDate(dateString) {
+            if (!dateString) return null;
+            const [datePart, timePart] = dateString.split(' ');
+            const [year, month, day] = datePart.split(':').map(Number);
+            const [hours, minutes, seconds] = timePart ? timePart.split(':').map(Number) : [0, 0, 0];
+            return new Date(year, month - 1, day, hours, minutes, seconds);
+        }
+        
+        // Clean non-alphanumeric characters
+        function cleanExifValue(value) {
+            return value ? value.replace(/[^a-zA-Z0-9\s]/g, '') : '';
+        }
+        
+        // Set up event listeners
+        function setupEventListeners() {
+            document.getElementById('imageInput').addEventListener('change', handleFileSelect);
+            dropZone.addEventListener('dragover', handleDragOver);
+            dropZone.addEventListener('dragleave', handleDragLeave);
+            dropZone.addEventListener('drop', handleDrop);
+            dropZone.addEventListener('click', () => document.getElementById('imageInput').click());
+            canvas.addEventListener('click', handleCanvasClick);
+            document.getElementById('toggleModeBtn').addEventListener('click', toggleMode);
+            setupColorDots();
+            document.getElementById('undoBtn').addEventListener('click', undo);
+            document.getElementById('redoBtn').addEventListener('click', redo);
+            document.getElementById('resetBtn').addEventListener('click', resetForm);
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    btn.classList.add('active');
+                    document.getElementById(`${btn.dataset.tab}Tab`).classList.add('active');
+                });
+            });
+            ['image_source', 'expression', 'skin_condition'].forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.addEventListener('change', (e) => {
+                        const customField = document.getElementById(`custom_${id}_container`);
+                        if (customField) {
+                            customField.classList.toggle('hidden', e.target.value !== 'Custom');
+                        }
+                        saveMetadata();
+                    });
+                }
+            });
+            ['city', 'clothes'].forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.addEventListener('change', () => {
+                        const customField = document.getElementById(`custom_${id}_container`);
+                        if (customField) {
+                            const hasCustom = Array.from(element.selectedOptions).some(opt => opt.value === 'custom');
+                            customField.classList.toggle('hidden', !hasCustom);
+                        }
+                        saveMetadata();
+                    });
+                }
+            });
+            setupInputValidation();
+            document.querySelectorAll('input, select, textarea').forEach(input => {
+                input.addEventListener('change', () => {
+                    saveMetadata();
+                    updateJsonPreview();
+                });
+                input.addEventListener('input', updateJsonPreview);
+            });
+            document.getElementById('exportBtn').addEventListener('click', exportJson);
+            document.getElementById('jsonInput').addEventListener('change', importJson);
+            document.getElementById('selectDirBtn').addEventListener('click', selectDirectory);
+            document.getElementById('landmarkCoordinates').addEventListener('click', () => {
+                state.colorMode = null;
+                state.selectedColorBox = null;
+                document.getElementById('toggleModeBtn').textContent = '🎨 Mode: Landmarks';
+                updateUI();
+            });
+        }
+        
+        // Select directory
+        async function selectDirectory() {
+            try {
+                state.directoryHandle = await window.showDirectoryPicker();
+                state.directory = state.directoryHandle.name;
+                document.getElementById('selectedDir').textContent = state.directory;
+            } catch (e) {
+                console.error('Directory selection failed:', e);
+                state.directory = null;
+                document.getElementById('selectedDir').textContent = 'None selected';
+            }
+        }
+        
+        // Reset form
+        async function resetForm() {
+            const preservedState = {
+                unique_id: document.getElementById('unique_id').value,
+                file_name: document.getElementById('file_name').value,
+                file_extension: document.getElementById('file_extension').value,
+                file_size: document.getElementById('file_size').value,
+                dimensions: document.getElementById('dimensions').value,
+                comments: document.getElementById('comments').value,
+                date: document.getElementById('date').value,
+                make: document.getElementById('make').value,
+                model: document.getElementById('model').value,
+                f_stop: document.getElementById('f_stop').value,
+                exposure_time: document.getElementById('exposure_time').value,
+                iso_speed: document.getElementById('iso_speed').value,
+                exposure_bias: document.getElementById('exposure_bias').value,
+                focal_length: document.getElementById('focal_length').value,
+                max_aperture: document.getElementById('max_aperture').value,
+                metering_mode: document.getElementById('metering_mode').value,
+                flash_mode: document.getElementById('flash_mode').value,
+                focal_length_35mm: document.getElementById('focal_length_35mm').value,
+                age_days: document.getElementById('age_days').value
+            };
+            
+            state.landmarks = {};
+            state.landmarkIndex = 0;
+            state.colorMode = null;
+            state.selectedColorBox = null;
+            state.clothesColours = ['', '', '', ''];
+            state.backgroundColours = ['', '', '', ''];
+            state.skinTones = ['', '', '', ''];
+            state.history = [];
+            state.redoStack = [];
+            
+            document.getElementById('name').value = 'Kanhaiyalal';
+            document.getElementById('height_cm').value = '178';
+            document.getElementById('weight_kg').value = '72';
+            const citySelect = document.getElementById('city');
+            Array.from(citySelect.options).forEach(opt => {
+                opt.selected = opt.value === 'Dhadheru_Godaran' || opt.value === 'Jaipur';
+            });
+            document.getElementById('custom_city').value = '';
+            document.getElementById('custom_city_container').classList.add('hidden');
+            document.getElementById('latitude_longitude').value = '27.964547992823288, 74.34065413108007';
+            document.getElementById('image_source').value = 'Smartphone';
+            document.getElementById('custom_image_source').value = '';
+            document.getElementById('custom_image_source_container').classList.add('hidden');
+            document.getElementById('expression').value = 'Neutral';
+            document.getElementById('custom_expression').value = '';
+            document.getElementById('custom_expression_container').classList.add('hidden');
+            document.getElementById('skin_condition').value = 'Normal';
+            document.getElementById('custom_skin_condition').value = '';
+            document.getElementById('custom_skin_condition_container').classList.add('hidden');
+            document.getElementById('wrinkles').value = 'None';
+            document.getElementById('hair_color').value = '';
+            document.getElementById('beard_length_mm').value = '';
+            const clothesSelect = document.getElementById('clothes');
+            Array.from(clothesSelect.options).forEach(opt => {
+                opt.selected = opt.value !== 'custom';
+            });
+            document.getElementById('custom_clothes').value = '';
+            document.getElementById('custom_clothes_container').classList.add('hidden');
+            document.getElementById('lighting').value = 'Natural';
+            document.getElementById('uv_index').value = '10';
+            document.getElementById('aqi').value = '';
+            document.getElementById('humidity_percent').value = '';
+            document.getElementById('sleep').value = '8';
+            document.getElementById('exercise').value = '0';
+            document.getElementById('medications').value = 'Na';
+            document.getElementById('skincare').value = 'Na';
+            document.getElementById('life_events').value = '';
+            document.getElementById('tags').value = '';
+            
+            Object.entries(preservedState).forEach(([id, value]) => {
+                document.getElementById(id).value = value;
+            });
+            
+            updateCanvas();
+            updateUI();
+            updateJsonPreview();
+            saveHistory();
+            await saveMetadata();
+        }
+        
+        // Handle file selection
+        async function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) {
+                await processFile(file);
+            }
+        }
+        
+        // Handle drag over
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.add('border-blue-500');
+        }
+        
+        // Handle drag leave
+        function handleDragLeave(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('border-blue-500');
+        }
+        
+        // Handle drop
+        async function handleDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('border-blue-500');
+            const dt = e.dataTransfer;
+            const file = dt.files[0];
+            if (file && (file.type === 'image/jpeg' || file.type === 'image/png')) {
+                await processFile(file);
+            } else {
+                alert('Please drop a valid JPEG or PNG image.');
+            }
+        }
+        
+        // Process uploaded file
+        async function processFile(file) {
+            state.landmarkIndex = 0;
+            state.landmarks = {};
+            state.clothesColours = ['', '', '', ''];
+            state.backgroundColours = ['', '', '', ''];
+            state.skinTones = ['', '', '', ''];
+            state.colorMode = null;
+            state.selectedColorBox = null;
+            state.history = [];
+            state.redoStack = [];
+            
+            document.getElementById('unique_id').value = file.name.split('.')[0];
+            document.getElementById('file_name').value = file.name;
+            document.getElementById('file_extension').value = file.name.split('.').pop().toLowerCase();
+            document.getElementById('file_size').value = formatFileSize(file.size);
+            
+            const formData = new FormData();
+            formData.append('image', file);
+            if (state.directory) formData.append('directory', state.directory);
+            
+            try {
+                const res = await fetch(`${apiBaseUrl}/api/images/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                
+                state.image_id = data.image_id;
+                state.image = new Image();
+                state.image.onload = () => {
+                    state.originalImage = state.image;
+                    canvas.width = Math.min(600, state.image.width);
+                    canvas.height = (state.image.height / state.image.width) * canvas.width;
+                    document.getElementById('dimensions').value = `${state.image.width}x${state.image.height}`;
+                    canvas.classList.remove('hidden');
+                    dropZone.classList.add('hidden');
+                    updateCanvas();
+                    saveHistory();
+                };
+                state.image.src = data.url;
+                
+                EXIF.getData(file, function() {
+                    try {
+                        const date = EXIF.getTag(this, 'DateTime') || 
+                                    EXIF.getTag(this, 'DateTimeOriginal') || 
+                                    new Date().toISOString();
+                        document.getElementById('date').value = date;
+                        const birthDate = new Date(2003, 6, 4);
+                        let captureDate = parseExifDate(date) || new Date();
+                        const ageDays = calculateAgeInDays(birthDate, captureDate);
+                        document.getElementById('age_days').value = ageDays >= 0 ? ageDays : '';
+                        const make = cleanExifValue(EXIF.getTag(this, 'Make')) || '';
+                        document.getElementById('make').value = make;
+                        const model = cleanExifValue(EXIF.getTag(this, 'Model')) || '';
+                        document.getElementById('model').value = model;
+                        const comments = cleanExifValue(EXIF.getTag(this, 'UserComment') || EXIF.getTag(this, 'ImageDescription')) || '';
+                        document.getElementById('comments').value = comments;
+                        const fStop = EXIF.getTag(this, 'FNumber');
+                        document.getElementById('f_stop').value = fStop ? `f/${fStop}` : '';
+                        const exposureTime = EXIF.getTag(this, 'ExposureTime');
+                        document.getElementById('exposure_time').value = exposureTime ? `${exposureTime}` : '';
+                        const isoSpeed = EXIF.getTag(this, 'ISOSpeedRatings') || EXIF.getTag(this, 'ISO');
+                        document.getElementById('iso_speed').value = isoSpeed ? `ISO ${isoSpeed}` : '';
+                        const exposureBias = EXIF.getTag(this, 'ExposureBiasValue');
+                        document.getElementById('exposure_bias').value = exposureBias ? `${exposureBias} EV` : '';
+                        const focalLength = EXIF.getTag(this, 'FocalLength');
+                        document.getElementById('focal_length').value = focalLength ? `${focalLength} mm` : '';
+                        const maxAperture = EXIF.getTag(this, 'MaxApertureValue');
+                        document.getElementById('max_aperture').value = maxAperture ? `f/${maxAperture}` : '';
+                        const meteringMode = cleanExifValue(EXIF.getTag(this, 'MeteringMode'));
+                        document.getElementById('metering_mode').value = meteringMode || '';
+                        const flashMode = cleanExifValue(EXIF.getTag(this, 'Flash'));
+                        document.getElementById('flash_mode').value = flashMode || '';
+                        const focalLength35mm = EXIF.getTag(this, 'FocalLengthIn35mmFilm');
+                        document.getElementById('focal_length_35mm').value = focalLength35mm ? `${focalLength35mm} mm` : '';
+                        saveMetadata();
+                    } catch (err) {
+                        console.error('Error extracting EXIF data:', err);
+                    }
+                });
+                
+                updateUI();
+                updateJsonPreview();
+            } catch (err) {
+                alert('Image upload failed: ' + err.message);
+            }
+        }
+        
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return `${bytes} bytes`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+            return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+        }
+        
+        // Handle canvas click
+        async function handleCanvasClick(e) {
+            if (!state.image.src) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const canvasX = Math.round((e.clientX - rect.left) * scaleX);
+            const canvasY = Math.round((e.clientY - rect.top) * scaleY);
+            
+            if (canvasX >= 0 && canvasX < canvas.width && canvasY >= 0 && canvasY < canvas.height) {
+                const imageScaleX = state.image.width / canvas.width;
+                const imageScaleY = state.image.height / canvas.height;
+                let x = Math.round(canvasX * imageScaleX);
+                let y = Math.round(canvasY * imageScaleY);
+                x = Math.min(Math.max(x, 0), state.image.width - 1);
+                y = Math.min(Math.max(y, 0), state.image.height - 1);
+                
+                if (!validateCoordinates(x, y, state.image.width, state.image.height)) {
+                    alert('Coordinate out of image bounds');
+                    return;
+                }
+                
+                if (state.colorMode && state.selectedColorBox !== null) {
+                    const pixel = ctx.getImageData(canvasX, canvasY, 1, 1).data;
+                    const hex = `#${((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1).padStart(6, '0')}`;
+                    
+                    if (state.colorMode === 'clothes_colour') {
+                        state.clothesColours[state.selectedColorBox] = hex;
+                        document.getElementById(`clothes_colour_${state.selectedColorBox}`).style.backgroundColor = hex;
+                    } else if (state.colorMode === 'background_colour') {
+                        state.backgroundColours[state.selectedColorBox] = hex;
+                        document.getElementById(`background_colour_${state.selectedColorBox}`).style.backgroundColor = hex;
+                    } else if (state.colorMode === 'skin_tone') {
+                        state.skinTones[state.selectedColorBox] = hex;
+                        document.getElementById(`skin_tone_${state.selectedColorBox}`).style.backgroundColor = hex;
+                    }
+                    
+                    state.selectedColorBox = state.selectedColorBox < 3 ? state.selectedColorBox + 1 : null;
+                } else if (!state.colorMode && state.landmarkIndex < landmarkKeys.length) {
+                    const key = landmarkKeys[state.landmarkIndex];
+                    setLandmark(key, { x, y });
+                    state.landmarkIndex++;
+                }
+                
+                saveHistory();
+                updateCanvas();
+                updateUI();
+                await saveMetadata();
+                updateJsonPreview();
+            }
+        }
+        
+        // Validate coordinates
+        function validateCoordinates(x, y, width, height) {
+            return x >= 0 && x < width && y >= 0 && y < height;
+        }
+        
+        // Set landmark
+        function setLandmark(key, point) {
+            state.landmarks[key] = { x: point.x, y: point.y };
+            console.log(`Captured ${key}: (${point.x}, ${point.y})`);
+        }
+        
+        // Toggle mode
+        function toggleMode() {
+            const modes = [null, 'clothes_colour', 'background_colour', 'skin_tone'];
+            const currentIndex = modes.indexOf(state.colorMode);
+            state.colorMode = modes[(currentIndex + 1) % modes.length];
+            
+            const modeLabels = {
+                null: 'Landmarks',
+                'clothes_colour': 'Clothes Colors',
+                'background_colour': 'Background Colors',
+                'skin_tone': 'Skin Tones'
+            };
+            
+            document.getElementById('toggleModeBtn').textContent = `🎨 Mode: ${modeLabels[state.colorMode]}`;
+            state.selectedColorBox = state.colorMode ? 0 : null;
+            updateUI();
+        }
+        
+        // Setup color dots
+        function setupColorDots() {
+            for (let i = 0; i < 4; i++) {
+                document.getElementById(`clothes_colour_${i}`).addEventListener('click', () => {
+                    state.colorMode = 'clothes_colour';
+                    state.selectedColorBox = i;
+                    document.getElementById('toggleModeBtn').textContent = '🎨 Mode: Clothes Colors';
+                    updateUI();
+                });
+                document.getElementById(`background_colour_${i}`).addEventListener('click', () => {
+                    state.colorMode = 'background_colour';
+                    state.selectedColorBox = i;
+                    document.getElementById('toggleModeBtn').textContent = '🎨 Mode: Background Colors';
+                    updateUI();
+                });
+                document.getElementById(`skin_tone_${i}`).addEventListener('click', () => {
+                    state.colorMode = 'skin_tone';
+                    state.selectedColorBox = i;
+                    document.getElementById('toggleModeBtn').textContent = '🎨 Mode: Skin Tones';
+                    updateUI();
+                });
+            }
+        }
+        
+        // Update canvas
+        function updateCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (state.image.src) {
+                ctx.drawImage(state.image, 0, 0, canvas.width, canvas.height);
+            }
+            
+            for (let key of landmarkKeys.slice(0, state.landmarkIndex)) {
+                const point = state.landmarks[key];
+                if (point && point.x != null && point.y != null) {
+                    const canvasX = point.x * (canvas.width / state.image.width);
+                    const canvasY = point.y * (canvas.height / state.image.height);
+                    ctx.beginPath();
+                    ctx.arc(canvasX, canvasY, 3, 0, 2 * Math.PI);
+                    ctx.fillStyle = 'red';
+                    ctx.fill();
+                }
+            }
+        }
+        
+        // Update UI
+        function updateUI() {
+            const collectedCount = Object.keys(state.landmarks).length;
+            document.getElementById('collectedCount').textContent = collectedCount;
+            
+            if (!state.colorMode && state.landmarkIndex < landmarkKeys.length) {
+                currentLandmark.textContent = `Next: ${landmarkKeys[state.landmarkIndex]}`;
+                currentLandmark.classList.remove('hidden');
+            } else {
+                currentLandmark.classList.add('hidden');
+            }
+            
+            updateColorBoxes();
+            updateLandmarkCoordinates();
+            updateUndoRedoButtons();
+            updateCursorStyle();
+        }
+        
+        // Update color boxes
+        function updateColorBoxes() {
+            for (let i = 0; i < 4; i++) {
+                const clothesBox = document.getElementById(`clothes_colour_${i}`);
+                const backgroundBox = document.getElementById(`background_colour_${i}`);
+                const skinToneBox = document.getElementById(`skin_tone_${i}`);
+                clothesBox.style.backgroundColor = state.clothesColours[i] || '#4b5563';
+                backgroundBox.style.backgroundColor = state.backgroundColours[i] || '#4b5563';
+                skinToneBox.style.backgroundColor = state.skinTones[i] || '#4b5563';
+                clothesBox.style.transition = 'all 0.3s ease';
+                backgroundBox.style.transition = 'all 0.3s ease';
+                skinToneBox.style.transition = 'all 0.3s ease';
+            }
+        }
+        
+        // Update cursor style
+        function updateCursorStyle() {
+            if (state.colorMode && state.selectedColorBox !== null) {
+                canvas.style.cursor = 'crosshair';
+            } else if (!state.colorMode && state.landmarkIndex < landmarkKeys.length) {
+                canvas.style.cursor = 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHgwAAAABJRU5ErkJggg==") 4 4, auto';
+            } else {
+                canvas.style.cursor = 'default';
+            }
+        }
+        
+        // Update landmark coordinates
+        function updateLandmarkCoordinates() {
+            const textarea = document.getElementById('landmarkCoordinates');
+            let text = '';
+            for (let key of landmarkKeys.slice(0, state.landmarkIndex)) {
+                const point = state.landmarks[key];
+                if (point && point.x != null && point.y != null) {
+                    text += `${key}: (${point.x}, ${point.y})\n`;
+                }
+            }
+            textarea.value = text;
+        }
+        
+        // Save history
+        function saveHistory() {
+            if (state.isImporting) return;
+            state.history.push(JSON.parse(JSON.stringify({
+                landmarks: state.landmarks,
+                landmarkIndex: state.landmarkIndex,
+                clothesColours: state.clothesColours,
+                backgroundColours: state.backgroundColours,
+                skinTones: state.skinTones
+            })));
+            if (state.history.length > 50) state.history.shift();
+            state.redoStack = [];
+            updateUndoRedoButtons();
+        }
+        
+        // Undo
+        async function undo() {
+            if (state.history.length <= 1) return;
+            state.redoStack.push(state.history.pop());
+            const prevState = state.history[state.history.length - 1];
+            state.landmarks = JSON.parse(JSON.stringify(prevState.landmarks));
+            state.landmarkIndex = prevState.landmarkIndex;
+            state.clothesColours = prevState.clothesColours;
+            state.backgroundColours = prevState.backgroundColours;
+            state.skinTones = prevState.skinTones;
+            updateCanvas();
+            updateUI();
+            await saveMetadata();
+            updateJsonPreview();
+        }
+        
+        // Redo
+        async function redo() {
+            if (state.redoStack.length === 0) return;
+            const nextState = state.redoStack.pop();
+            state.history.push(nextState);
+            state.landmarks = JSON.parse(JSON.stringify(nextState.landmarks));
+            state.landmarkIndex = nextState.landmarkIndex;
+            state.clothesColours = nextState.clothesColours;
+            state.backgroundColours = nextState.backgroundColours;
+            state.skinTones = nextState.skinTones;
+            updateCanvas();
+            updateUI();
+            await saveMetadata();
+            updateJsonPreview();
+        }
+        
+        // Update undo/redo buttons
+        function updateUndoRedoButtons() {
+            document.getElementById('undoBtn').disabled = state.history.length <= 1;
+            document.getElementById('redoBtn').disabled = state.redoStack.length === 0;
+        }
+        
+        // Setup input validation
+        function setupInputValidation() {
+            ['height_cm', 'weight_kg', 'aqi', 'exercise'].forEach(id => {
+                const input = document.getElementById(id);
+                if (input) {
+                    input.addEventListener('input', () => {
+                        if (input.value < input.min) input.value = input
